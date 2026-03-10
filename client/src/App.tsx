@@ -3,13 +3,18 @@ import { queryClient } from "./lib/queryClient";
 import { QueryClientProvider } from "@tanstack/react-query";
 import { Toaster } from "@/components/ui/toaster";
 import { TooltipProvider } from "@/components/ui/tooltip";
+
+import Dashboard from "@/pages/dashboard";
+import AlertsPage from "@/pages/alerts";
+import AnalyticsPage from "@/pages/analytics";
 import NotFound from "@/pages/not-found";
 
 function Router() {
   return (
     <Switch>
-      {/* Add pages below */}
-      {/* <Route path="/" component={Home}/> */}
+      <Route path="/" component={Dashboard} />
+      <Route path="/alerts" component={AlertsPage} />
+      <Route path="/analytics" component={AnalyticsPage} />
       {/* Fallback to 404 */}
       <Route component={NotFound} />
     </Switch>
