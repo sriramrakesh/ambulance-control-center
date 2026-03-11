@@ -1,0 +1,34 @@
+
+> rest-express@1.0.0 dev
+> NODE_ENV=development tsx server/index.ts
+
+[1G[0K1:39:30 PM [express] serving on port 5000
+1:39:36 PM [express] GET /api/hospitals 304 in 3ms :: [{"id":1,"name":"NYU Langone Health","lat":40.7419,"lng":-73.9739,"availableBeds":12},{"id":2,"name":"Mount Sinai Hospital","lat":40.7898,"lng":-73.953,"availableBeds":5},{"id":3,"name":"Bellevue Hospital","lat":40.7391,"lng":-73.9749,"availableBeds":24}]
+1:39:39 PM [express] GET /api/hospitals 200 in 2ms :: [{"id":1,"name":"NYU Langone Health","lat":40.7419,"lng":-73.9739,"availableBeds":12},{"id":2,"name":"Mount Sinai Hospital","lat":40.7898,"lng":-73.953,"availableBeds":5},{"id":3,"name":"Bellevue Hospital","lat":40.7391,"lng":-73.9749,"availableBeds":24}]
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+[1;1H[0J[2m1:41:22 PM[22m [36m[1m[vite][22m[39m [90m[2m(client)[22m[39m [32mhmr update [39m[2m/src/components/map-view.tsx, /src/index.css[22m
+[2m1:41:23 PM[22m [36m[1m[vite][22m[39m [90m[2m(client)[22m[39m [33mhmr invalidate [39m[2m/src/components/map-view.tsx[22m Could not Fast Refresh ("SIGNALS_CONFIG" export is incompatible). Learn more at https://github.com/vitejs/vite-plugin-react/tree/main/packages/plugin-react#consistent-components-exports
+[2m1:41:24 PM[22m [36m[1m[vite][22m[39m [90m[2m(client)[22m[39m [32mhmr update [39m[2m/src/pages/dashboard.tsx[22m
+1:41:25 PM [express] GET /api/hospitals 304 in 13ms :: [{"id":1,"name":"NYU Langone Health","lat":40.7419,"lng":-73.9739,"availableBeds":12},{"id":2,"name":"Mount Sinai Hospital","lat":40.7898,"lng":-73.953,"availableBeds":5},{"id":3,"name":"Bellevue Hospital","lat":40.7391,"lng":-73.9749,"availableBeds":24}]

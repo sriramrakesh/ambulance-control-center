@@ -1,0 +1,134 @@
+
+> rest-express@1.0.0 dev
+> NODE_ENV=development tsx server/index.ts
+
+[1G[0K1:41:38 PM [express] serving on port 5000
+1:41:43 PM [express] GET /api/hospitals 304 in 4ms :: [{"id":1,"name":"NYU Langone Health","lat":40.7419,"lng":-73.9739,"availableBeds":12},{"id":2,"name":"Mount Sinai Hospital","lat":40.7898,"lng":-73.953,"availableBeds":5},{"id":3,"name":"Bellevue Hospital","lat":40.7391,"lng":-73.9749,"availableBeds":24}]
+1:43:27 PM [express] GET /api/ambulances 304 in 12ms :: [{"id":1,"vehicleId":"AMB-01","lat":40.7128,"lng":-74.006,"status":"responding","speed":65},{"id":2,"vehicleId":"AMB-02","lat":40.7282,"lng":-73.7949,"status":"available","speed":0},{"id":3,"vehicleId":"AMB-03","lat":40.7488,"lng":-73.9857,"status":"en-route","speed":45}]
+1:43:27 PM [express] GET /api/traffic-lights 200 in 12ms :: [{"id":1,"intersection":"Broadway & Wall St","lat":40.7077,"lng":-74.0119,"status":"green","overrideActive":true},{"id":4,"intersection":"Park Ave & 59th St","lat":40.7629,"lng":-73.9686,"status":"red","overrideActive":false},{"id":3,"intersection":"Lexington & 42nd St","lat":40.7517,"lng":-73.9768,"status":"red","overrideActive":false},{"id":2,"intersection":"5th Ave & 34th St","lat":40.7484,"lng":-73.9857,"status":"red","overrideActive":false}]
+1:43:27 PM [express] GET /api/hospitals 304 in 2ms :: [{"id":1,"name":"NYU Langone Health","lat":40.7419,"lng":-73.9739,"availableBeds":12},{"id":2,"name":"Mount Sinai Hospital","lat":40.7898,"lng":-73.953,"availableBeds":5},{"id":3,"name":"Bellevue Hospital","lat":40.7391,"lng":-73.9749,"availableBeds":24}]
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+[1;1H[0J[2m1:43:57 PM[22m [36m[1m[vite][22m[39m [90m[2m(client)[22m[39m [32mhmr update [39m[2m/src/components/map-view.tsx, /src/index.css[22m
+[2m1:43:59 PM[22m [36m[1m[vite][22m[39m [90m[2m(client)[22m[39m [33mhmr invalidate [39m[2m/src/components/map-view.tsx[22m Could not Fast Refresh ("SIGNALS_CONFIG" export is incompatible). Learn more at https://github.com/vitejs/vite-plugin-react/tree/main/packages/plugin-react#consistent-components-exports
+[2m1:43:59 PM[22m [36m[1m[vite][22m[39m [90m[2m(client)[22m[39m [32mhmr update [39m[2m/src/pages/dashboard.tsx[22m
+1:44:00 PM [express] GET /api/hospitals 304 in 10ms :: [{"id":1,"name":"NYU Langone Health","lat":40.7419,"lng":-73.9739,"availableBeds":12},{"id":2,"name":"Mount Sinai Hospital","lat":40.7898,"lng":-73.953,"availableBeds":5},{"id":3,"name":"Bellevue Hospital","lat":40.7391,"lng":-73.9749,"availableBeds":24}]
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+[1;1H[0J[2m1:44:32 PM[22m [36m[1m[vite][22m[39m [90m[2m(client)[22m[39m [32mhmr update [39m[2m/src/components/map-view.tsx, /src/index.css[22m
+[2m1:44:34 PM[22m [36m[1m[vite][22m[39m [90m[2m(client)[22m[39m [33mhmr invalidate [39m[2m/src/components/map-view.tsx[22m Could not Fast Refresh (export removed)
+[2m1:44:34 PM[22m [36m[1m[vite][22m[39m [90m[2m(client)[22m[39m [32mhmr update [39m[2m/src/pages/dashboard.tsx[22m
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+[1;1H[0J[2m1:44:36 PM[22m [36m[1m[vite][22m[39m [90m[2m(client)[22m[39m [32mhmr update [39m[2m/src/pages/dashboard.tsx, /src/index.css[22m
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+[1;1H[0J[2m1:44:41 PM[22m [36m[1m[vite][22m[39m [90m[2m(client)[22m[39m [32mhmr update [39m[2m/src/pages/dashboard.tsx, /src/index.css[22m [33m(x2)[39m
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+[1;1H[0J[2m1:44:48 PM[22m [36m[1m[vite][22m[39m [90m[2m(client)[22m[39m [32mhmr update [39m[2m/src/pages/dashboard.tsx, /src/index.css[22m [33m(x3)[39m
