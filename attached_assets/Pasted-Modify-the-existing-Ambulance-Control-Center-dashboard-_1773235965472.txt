@@ -1,0 +1,94 @@
+Modify the existing Ambulance Control Center dashboard project.
+
+Keep the current UI style but improve the map simulation and emergency vehicle system with the following changes.
+
+1. Ambulance Icon
+Replace the current arrow marker with a realistic ambulance icon (🚑) or ambulance vehicle image marker.
+The ambulance should move smoothly along the route path.
+
+2. Floating Info Panel
+Reduce the size of the floating vehicle information panel on the right side.
+Make it more compact and clean while still showing:
+- Vehicle ID
+- Speed
+- Distance
+- ETA
+- Progress bar
+
+3. Real Map Style
+Replace the dark static background map with a real interactive map using Leaflet.js or Mapbox.
+Use a real street map layer (OpenStreetMap or Mapbox Streets).
+Enable zoom and smooth panning.
+
+4. Traffic Lights System
+Add animated traffic lights at intersections.
+
+Traffic lights should have 3 states:
+- 🔴 Red
+- 🟡 Yellow
+- 🟢 Green
+
+Logic:
+- All signals are RED initially
+- When the ambulance approaches a signal (within a certain distance), that signal turns GREEN
+- After the ambulance passes, the signal returns to RED
+
+Add glow animation to active green signals.
+
+5. Route Visualization
+Show the route using a highlighted line.
+Add animated dashed line movement to show active emergency route.
+
+6. Hospital System
+Add hospital markers (🏥) on the map.
+When an ambulance is active:
+- Automatically calculate and display the route to the nearest hospital
+- Highlight the hospital destination.
+
+7. Fire Engine Mode
+Add another emergency vehicle type: Fire Engine.
+
+When the fire engine is dispatched:
+- Use a fire truck icon 🚒 or fire truck image marker
+- The vehicle should route to a fire incident location instead of hospital
+- The fire incident location should be highlighted with a fire emoji 🔥
+- Display a pulsing red highlight around the fire location.
+
+8. Vehicle Type System
+Support multiple emergency vehicles:
+- Ambulance → route to hospital
+- Fire Engine → route to fire incident
+
+Display vehicle type in the info panel.
+
+9. Emergency Highlight Effects
+Add animated effects:
+- Pulsing circles around emergency vehicles
+- Glow effect on destination locations
+- Flashing signals when overridden
+
+10. Map Improvements
+Add:
+- Road labels
+- Intersection markers
+- Smooth vehicle movement animation
+- Auto camera follow for active vehicle
+
+11. UI Enhancements
+Improve visual appearance:
+- Smaller floating panels
+- Cleaner icons
+- Smooth animations
+- Professional smart-city control center style
+
+12. Code Requirements
+Keep the existing React + Vite structure.
+Use Leaflet.js or Mapbox for the real map.
+Organize code into components:
+- MapView
+- EmergencyVehicle
+- TrafficSignals
+- EmergencyRoutes
+- ControlPanel
+
+Return the full modified code and explain where the changes were made.

@@ -1,474 +1,400 @@
 import { useEffect, useState, useRef } from "react";
-import { MapContainer, TileLayer, Marker, Popup, useMap, Polyline } from "react-leaflet";
+import { MapContainer, TileLayer, Marker, Popup, useMap, Polyline, Circle } from "react-leaflet";
 import L from "leaflet";
-import { useAmbulances } from "@/hooks/use-ambulances";
-import { useTrafficLights } from "@/hooks/use-traffic-lights";
 import { useHospitals } from "@/hooks/use-hospitals";
-import { Badge } from "@/components/ui/badge";
-import { Loader2, Navigation, MapPin } from "lucide-react";
-import { useMutation, useQueryClient } from "@tanstack/react-query";
-import { api } from "@shared/routes";
+import { VEHICLES_CONFIG, SIGNALS_CONFIG } from "@/lib/simulation-config";
 
-// Helper to calculate distance between two coordinates (in miles)
+// ─────────────────────────────────────────────────────────────────────────────
+// CONSTANTS
+// ─────────────────────────────────────────────────────────────────────────────
+
+const GREEN_THRESHOLD_MILES = 0.12;
+const ANIMATION_DURATION = 45;
+const MAP_CENTER: [number, number] = [40.7310, -73.9930];
+
+// ─────────────────────────────────────────────────────────────────────────────
+// HELPERS
+// ─────────────────────────────────────────────────────────────────────────────
+
 function haversineDistance(lat1: number, lon1: number, lat2: number, lon2: number): number {
-  const R = 3959; // Earth's radius in miles
+  const R = 3959;
   const dLat = (lat2 - lat1) * Math.PI / 180;
   const dLon = (lon2 - lon1) * Math.PI / 180;
-  const a = Math.sin(dLat/2) * Math.sin(dLat/2) +
-    Math.cos(lat1 * Math.PI / 180) * Math.cos(lat2 * Math.PI / 180) *
-    Math.sin(dLon/2) * Math.sin(dLon/2);
-  const c = 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1-a));
-  return R * c;
+  const a = Math.sin(dLat / 2) ** 2 +
+    Math.cos(lat1 * Math.PI / 180) * Math.cos(lat2 * Math.PI / 180) * Math.sin(dLon / 2) ** 2;
+  return R * 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1 - a));
 }
 
-// Generate HTML for map icons so we don't need heavy react-dom/server rendering
-const createAmbulanceIcon = (status: string, direction: number = 0) => {
-  const isEmergency = status === 'en-route' || status === 'responding';
-  const colorClass = isEmergency ? 'text-destructive border-destructive shadow-[0_0_15px_rgba(220,38,38,0.5)] bg-destructive/20' : 'text-primary border-primary shadow-[0_0_15px_rgba(6,182,212,0.3)] bg-primary/20';
-  const pulseClass = isEmergency ? 'animate-pulse' : '';
-  
-  return L.divIcon({
-    className: 'bg-transparent border-none',
-    html: `
-      <div class="relative flex items-center justify-center w-10 h-10 rounded-full border-2 ${colorClass} backdrop-blur-sm ${pulseClass}" style="transform: rotate(${direction}deg)">
-        <svg xmlns="http://www.w3.org/2000/svg" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round">
-          <path d="M12 2L12 22M12 2L8 6M12 2L16 6"/>
-        </svg>
-      </div>
-    `,
-    iconSize: [40, 40],
-    iconAnchor: [20, 20],
-  });
-};
-
-const createTrafficLightIcon = (status: string, override: boolean) => {
-  let lightColor = 'bg-red-500 shadow-[0_0_15px_rgba(239,68,68,0.8)]';
-  let glowClass = '';
-  if (status === 'green') {
-    lightColor = 'bg-emerald-500 shadow-[0_0_15px_rgba(16,185,129,0.8)]';
-    glowClass = 'animate-pulse shadow-lg shadow-emerald-500/50';
+function interpolateRoute(route: [number, number][], t: number): [number, number] {
+  if (route.length < 2) return route[0] ?? [0, 0];
+  const segs: number[] = [];
+  let total = 0;
+  for (let i = 0; i < route.length - 1; i++) {
+    const d = haversineDistance(route[i][0], route[i][1], route[i + 1][0], route[i + 1][1]);
+    segs.push(d);
+    total += d;
   }
-  if (status === 'yellow') lightColor = 'bg-amber-400 shadow-[0_0_15px_rgba(251,191,36,0.8)]';
-  
-  const overrideBorder = override ? 'border-primary ring-2 ring-primary shadow-[0_0_20px_rgba(6,182,212,0.5)]' : 'border-slate-600';
-  
-  return L.divIcon({
-    className: 'bg-transparent border-none',
-    html: `
-      <div class="relative flex flex-col items-center justify-center p-1.5 w-8 h-8 rounded-full bg-slate-900 border-2 ${overrideBorder} transition-all duration-300">
-        <div class="w-4 h-4 rounded-full ${lightColor} ${glowClass}"></div>
-        ${override ? '<div class="absolute -top-1 -right-1 w-3 h-3 bg-primary rounded-full animate-ping"></div>' : ''}
-      </div>
-    `,
-    iconSize: [32, 32],
-    iconAnchor: [16, 16],
-  });
-};
+  let target = t * total;
+  for (let i = 0; i < segs.length; i++) {
+    if (target <= segs[i]) {
+      const frac = segs[i] > 0 ? target / segs[i] : 0;
+      return [
+        route[i][0] + (route[i + 1][0] - route[i][0]) * frac,
+        route[i][1] + (route[i + 1][1] - route[i][1]) * frac,
+      ];
+    }
+    target -= segs[i];
+  }
+  return route[route.length - 1];
+}
 
-const createHospitalIcon = () => {
+// ─────────────────────────────────────────────────────────────────────────────
+// ICON FACTORIES
+// ─────────────────────────────────────────────────────────────────────────────
+
+function createVehicleIcon(emoji: string, color: string, isMoving: boolean) {
+  const rings = isMoving ? `
+    <div class="leaflet-ping-ring" style="position:absolute;inset:0;border-radius:50%;border:2px solid ${color};opacity:0.7;"></div>
+    <div class="leaflet-ping-ring" style="position:absolute;inset:-8px;border-radius:50%;border:1.5px solid ${color};opacity:0.35;animation-delay:0.45s;"></div>
+  ` : "";
   return L.divIcon({
-    className: 'bg-transparent border-none',
-    html: `
-      <div class="relative flex items-center justify-center w-12 h-12 bg-slate-800 rounded-xl border-2 border-slate-500 shadow-xl overflow-hidden">
-        <div class="absolute inset-0 bg-blue-500/10"></div>
-        <b class="text-blue-400 text-xl font-display font-bold">H</b>
-      </div>
-    `,
+    className: "bg-transparent border-none",
+    html: `<div style="position:relative;display:flex;align-items:center;justify-content:center;width:48px;height:48px;">
+      ${rings}
+      <div style="width:42px;height:42px;border-radius:50%;background:rgba(2,6,23,0.93);border:2.5px solid ${color};box-shadow:0 0 18px ${color},0 0 36px ${color}44;display:flex;align-items:center;justify-content:center;font-size:22px;line-height:1;">${emoji}</div>
+    </div>`,
     iconSize: [48, 48],
     iconAnchor: [24, 24],
   });
-};
+}
 
-// Map controller component for camera following
-function MapController({ center, zoom }: { center?: [number, number]; zoom?: number }) {
+function createSignalIcon(status: "red" | "yellow" | "green", priorityVehicle: string | null) {
+  const dot = status === "green" ? "#22c55e" : "#ef4444";
+  const glow = status === "green" ? "0 0 12px #22c55e,0 0 24px #22c55e88" : "none";
+  const border = status === "green" ? "#22c55e" : "#334155";
+  const tag = priorityVehicle && status === "green"
+    ? `<div style="background:#22c55e;color:#fff;font-size:7px;font-weight:800;padding:1px 4px;border-radius:3px;white-space:nowrap;margin-bottom:2px;letter-spacing:0.05em;">⚡ ${priorityVehicle}</div>` : "";
+  return L.divIcon({
+    className: "bg-transparent border-none",
+    html: `<div style="display:flex;flex-direction:column;align-items:center;gap:2px;">${tag}
+      <div style="width:26px;height:26px;border-radius:50%;background:rgba(2,6,23,0.96);border:2px solid ${border};box-shadow:${glow};display:flex;align-items:center;justify-content:center;">
+        <div style="width:13px;height:13px;border-radius:50%;background:${dot};box-shadow:0 0 6px ${dot}cc;"></div>
+      </div>
+    </div>`,
+    iconSize: [26, priorityVehicle && status === "green" ? 46 : 30],
+    iconAnchor: [13, 13],
+  });
+}
+
+function createHospitalIcon(isTarget: boolean) {
+  const ring = isTarget
+    ? `<div class="leaflet-ping-ring" style="position:absolute;inset:0;border-radius:12px;border:2px solid #22d3ee;opacity:0.6;"></div>` : "";
+  return L.divIcon({
+    className: "bg-transparent border-none",
+    html: `<div style="position:relative;display:flex;align-items:center;justify-content:center;width:50px;height:50px;">${ring}
+      <div style="width:44px;height:44px;border-radius:12px;background:rgba(2,6,23,0.93);border:2px solid ${isTarget ? "#22d3ee" : "#334155"};box-shadow:${isTarget ? "0 0 20px rgba(34,211,238,0.5)" : "none"};display:flex;align-items:center;justify-content:center;font-size:24px;">🏥</div>
+    </div>`,
+    iconSize: [50, 50],
+    iconAnchor: [25, 25],
+  });
+}
+
+function createIncidentIcon() {
+  return L.divIcon({
+    className: "bg-transparent border-none",
+    html: `<div style="position:relative;display:flex;align-items:center;justify-content:center;width:54px;height:54px;">
+      <div class="leaflet-ping-ring" style="position:absolute;inset:0;border-radius:50%;border:2px solid #ef4444;opacity:0.7;"></div>
+      <div class="leaflet-ping-ring" style="position:absolute;inset:-8px;border-radius:50%;border:1.5px solid #ef4444;opacity:0.4;animation-delay:0.5s;"></div>
+      <div style="width:46px;height:46px;border-radius:50%;background:rgba(2,6,23,0.92);border:2.5px solid #ef4444;box-shadow:0 0 20px rgba(239,68,68,0.8),0 0 40px rgba(239,68,68,0.3);display:flex;align-items:center;justify-content:center;font-size:24px;">🔥</div>
+    </div>`,
+    iconSize: [54, 54],
+    iconAnchor: [27, 27],
+  });
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// MAP REF SETTER — grabs Leaflet map instance imperatively
+// ─────────────────────────────────────────────────────────────────────────────
+
+function MapRefSetter({ mapRef }: { mapRef: React.MutableRefObject<L.Map | null> }) {
   const map = useMap();
-  
-  useEffect(() => {
-    if (center) {
-      map.setView(center, zoom ?? 15, { animate: true, duration: 0.5 });
-    }
-  }, [center, zoom, map]);
-  
+  mapRef.current = map;
   return null;
 }
 
-export function MapView() {
-  const { data: ambulances, isLoading: loadingAmbulances } = useAmbulances();
-  const { data: trafficLights, isLoading: loadingLights } = useTrafficLights();
-  const { data: hospitals, isLoading: loadingHospitals } = useHospitals();
+// ─────────────────────────────────────────────────────────────────────────────
+// TYPES
+// ─────────────────────────────────────────────────────────────────────────────
+
+export type VehicleState = {
+  id: string;
+  type: "ambulance" | "fire";
+  label: string;
+  icon: string;
+  color: string;
+  speed: number;
+  route: [number, number][];
+  currentPos: [number, number];
+  progress: number;
+  distanceTraveled: number;
+  totalDistance: number;
+  isActive: boolean;
+  isFinished: boolean;
+  destinationName: string;
+  startedAt: number;
+};
+
+export type SignalState = {
+  id: string;
+  lat: number;
+  lng: number;
+  label: string;
+  status: "red" | "yellow" | "green";
+  priorityVehicle: string | null;
+};
+
+// ─────────────────────────────────────────────────────────────────────────────
+// MAP VIEW
+// ─────────────────────────────────────────────────────────────────────────────
+
+interface MapViewProps {
+  followVehicleId?: string | null;
+  activeVehicleIds: string[];
+  onVehiclesUpdate?: (vehicles: VehicleState[]) => void;
+  onSignalsUpdate?: (signals: SignalState[]) => void;
+}
+
+export function MapView({ followVehicleId, activeVehicleIds, onVehiclesUpdate, onSignalsUpdate }: MapViewProps) {
+  const { data: hospitals } = useHospitals();
   const [mounted, setMounted] = useState(false);
-  const [animatedAmbulance, setAnimatedAmbulance] = useState<any>(null);
-  const [route, setRoute] = useState<[number, number][]>([]);
-  const [metrics, setMetrics] = useState<{ speed: number; distance: number; eta: string; progress: number }>({
-    speed: 0,
-    distance: 0,
-    eta: '--:--',
-    progress: 0,
-  });
-  const [mapCenter, setMapCenter] = useState<[number, number]>([40.7128, -74.0060]);
-  const animationRef = useRef<number | null>(null);
-  const startTimeRef = useRef<number>(0);
-  const queryClient = useQueryClient();
+  const [vehicles, setVehicles] = useState<VehicleState[]>([]);
+  const [signals, setSignals] = useState<SignalState[]>([]);
 
-  // New York City center default
-  const defaultCenter: [number, number] = [40.7128, -74.0060];
+  // Stable refs — avoid stale closures without triggering re-renders
+  const vehiclesRef = useRef<VehicleState[]>([]);
+  const activeIdsRef = useRef<string[]>(activeVehicleIds);
+  const followIdRef = useRef<string | null>(followVehicleId ?? null);
+  const onVehiclesRef = useRef(onVehiclesUpdate);
+  const onSignalsRef = useRef(onSignalsUpdate);
+  const mapRef = useRef<L.Map | null>(null); // Leaflet map instance for imperative pan
+  const lastFollowPos = useRef<[number, number] | null>(null);
+  const animStarted = useRef(false);
+  const initializedRef = useRef(false);
 
-  // Mutation to update traffic light status
-  const updateTrafficLight = useMutation({
-    mutationFn: async (data: { id: number; status: string; overrideActive: boolean }) => {
-      const res = await fetch(api.trafficLights.update.path.replace(':id', data.id.toString()), {
-        method: 'PUT',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ status: data.status, overrideActive: data.overrideActive }),
-        credentials: 'include',
-      });
-      if (!res.ok) throw new Error('Failed to update traffic light');
-      return res.json();
-    },
-    onSuccess: () => {
-      queryClient.invalidateQueries({ queryKey: [api.trafficLights.list.path] });
-    },
-  });
+  useEffect(() => { setMounted(true); }, []);
+  useEffect(() => { activeIdsRef.current = activeVehicleIds; }, [activeVehicleIds]);
+  useEffect(() => { followIdRef.current = followVehicleId ?? null; }, [followVehicleId]);
+  useEffect(() => { onVehiclesRef.current = onVehiclesUpdate; }, [onVehiclesUpdate]);
+  useEffect(() => { onSignalsRef.current = onSignalsUpdate; }, [onSignalsUpdate]);
 
-  // Initialize animation when ambulances and hospitals load
+  // Initialize vehicles once hospitals load
   useEffect(() => {
-    if (!ambulances || ambulances.length === 0 || !hospitals || hospitals.length === 0) return;
-    
-    const activeAmbulance = ambulances.find(a => a.status === 'en-route');
-    if (!activeAmbulance) return;
+    if (!hospitals || hospitals.length === 0 || initializedRef.current) return;
+    initializedRef.current = true;
 
-    // Choose destination hospital (first one for demo)
-    const destination = hospitals[0];
-    
-    // Generate route with intermediate traffic lights
-    const routePoints: [number, number][] = [[activeAmbulance.lat, activeAmbulance.lng]];
-    
-    // Add traffic light points along the route
-    const relevantLights = trafficLights?.filter(light => {
-      const distToStart = haversineDistance(activeAmbulance.lat, activeAmbulance.lng, light.lat, light.lng);
-      const distToEnd = haversineDistance(light.lat, light.lng, destination.lat, destination.lng);
-      return distToStart < 2 && distToEnd < 2; // Lights within 2 miles of route
-    }) || [];
+    setSignals(SIGNALS_CONFIG.map(s => ({ ...s, status: "red" as const, priorityVehicle: null })));
 
-    relevantLights.forEach(light => {
-      routePoints.push([light.lat, light.lng]);
-    });
-    
-    routePoints.push([destination.lat, destination.lng]);
-    
-    setRoute(routePoints);
-    setAnimatedAmbulance({
-      id: activeAmbulance.id,
-      vehicleId: activeAmbulance.vehicleId,
-      startPos: [activeAmbulance.lat, activeAmbulance.lng] as [number, number],
-      endPos: [destination.lat, destination.lng] as [number, number],
-      destination: destination,
-      lights: relevantLights,
-      speed: 45,
-      baseSpeed: 45,
-    });
-    
-    startTimeRef.current = Date.now();
-  }, [ambulances, hospitals, trafficLights]);
+    const now = Date.now();
+    const built: VehicleState[] = VEHICLES_CONFIG.map((cfg, idx) => {
+      let destPos: [number, number];
+      let destName: string;
+      if (cfg.destinationType === "hospital") {
+        const hosp = hospitals[Math.min(cfg.destinationIndex, hospitals.length - 1)];
+        destPos = [hosp.lat, hosp.lng];
+        destName = hosp.name;
+      } else {
+        destPos = cfg.incidentPos!;
+        destName = cfg.incidentLabel ?? "Fire Incident";
+      }
 
-  // Animation loop
-  useEffect(() => {
-    if (!animatedAmbulance || route.length < 2) return;
+      const route: [number, number][] = [
+        cfg.startPos,
+        [(cfg.startPos[0] + destPos[0]) / 2 + (idx % 2 === 0 ? 0.003 : -0.003),
+         (cfg.startPos[1] + destPos[1]) / 2 + (idx % 2 === 0 ? -0.002 : 0.002)],
+        destPos,
+      ];
 
-    const animate = () => {
-      const elapsed = (Date.now() - startTimeRef.current) / 1000; // seconds
-      const duration = 30; // 30 second animation
-      let progress = Math.min(elapsed / duration, 1);
-      
-      // Get current position along route
-      let currentPos = animatedAmbulance.startPos;
-      let traveledDistance = 0;
-      let segmentIndex = 0;
-
-      // Calculate position along multi-segment route
-      const totalDistance = haversineDistance(
-        animatedAmbulance.startPos[0],
-        animatedAmbulance.startPos[1],
-        animatedAmbulance.endPos[0],
-        animatedAmbulance.endPos[1]
-      );
-
-      // Interpolate along route segments
-      let distanceToTravel = progress * totalDistance;
+      let total = 0;
       for (let i = 0; i < route.length - 1; i++) {
-        const segmentDist = haversineDistance(route[i][0], route[i][1], route[i + 1][0], route[i + 1][1]);
-        if (distanceToTravel <= segmentDist) {
-          const segmentProgress = distanceToTravel / segmentDist;
-          currentPos = [
-            route[i][0] + (route[i + 1][0] - route[i][0]) * segmentProgress,
-            route[i][1] + (route[i + 1][1] - route[i][1]) * segmentProgress,
-          ] as [number, number];
-          break;
-        }
-        distanceToTravel -= segmentDist;
+        total += haversineDistance(route[i][0], route[i][1], route[i + 1][0], route[i + 1][1]);
       }
 
-      const remainingDistance = totalDistance * (1 - progress);
-      const eta = new Date(Date.now() + (remainingDistance / animatedAmbulance.baseSpeed) * 3600000);
-      const etaStr = eta.toLocaleTimeString('en-US', { hour: '2-digit', minute: '2-digit' });
+      return {
+        id: cfg.id, type: cfg.type, label: cfg.label, icon: cfg.icon,
+        color: cfg.color, speed: cfg.speed, route,
+        currentPos: cfg.startPos, progress: 0, distanceTraveled: 0,
+        totalDistance: total, isActive: true, isFinished: false,
+        destinationName: destName, startedAt: now + idx * 3500,
+      };
+    });
 
-      setMetrics({
-        speed: animatedAmbulance.baseSpeed,
-        distance: totalDistance * progress,
-        eta: etaStr,
-        progress: progress * 100,
-      });
+    vehiclesRef.current = built;
+    setVehicles(built);
+  }, [hospitals]);
 
-      setAnimatedAmbulance(prev => ({
-        ...prev,
-        currentPos,
-      }));
-
-      setMapCenter(currentPos);
-
-      // Check proximity to traffic lights and update status
-      animatedAmbulance.lights.forEach(light => {
-        const dist = haversineDistance(currentPos[0], currentPos[1], light.lat, light.lng);
-        const shouldGreen = dist < 0.15; // 0.15 miles (about 800 feet)
-        
-        if (shouldGreen && light.status !== 'green') {
-          updateTrafficLight.mutate({
-            id: light.id,
-            status: 'green',
-            overrideActive: true,
-          });
-        } else if (!shouldGreen && light.status === 'green' && light.overrideActive) {
-          updateTrafficLight.mutate({
-            id: light.id,
-            status: 'red',
-            overrideActive: false,
-          });
-        }
-      });
-
-      if (progress < 1) {
-        animationRef.current = requestAnimationFrame(animate);
-      }
-    };
-
-    animationRef.current = requestAnimationFrame(animate);
-    return () => {
-      if (animationRef.current) cancelAnimationFrame(animationRef.current);
-    };
-  }, [animatedAmbulance, route]);
-
+  // Animation loop — starts once, uses refs for all mutable values
   useEffect(() => {
-    setMounted(true);
-  }, []);
+    if (animStarted.current || vehiclesRef.current.length === 0) return;
+    animStarted.current = true;
 
-  if (!mounted) return <div className="flex-1 bg-background" />;
+    let frameId: number;
 
-  const isLoading = loadingAmbulances || loadingLights || loadingHospitals;
-  
-  // Get the primary animated ambulance or first ambulance
-  const displayAmbulance = animatedAmbulance || ambulances?.[0];
+    const tick = () => {
+      const now = Date.now();
+      const activeIds = activeIdsRef.current;
+
+      const updated: VehicleState[] = vehiclesRef.current.map(v => {
+        if (!activeIds.includes(v.id)) return { ...v, isActive: false };
+        if (v.isFinished) return { ...v, isActive: true };
+        const t = Math.min(Math.max(0, (now - v.startedAt) / 1000) / ANIMATION_DURATION, 1);
+        return { ...v, currentPos: interpolateRoute(v.route, t), progress: t * 100, distanceTraveled: t * v.totalDistance, isActive: true, isFinished: t >= 1 };
+      });
+
+      const newSignals: SignalState[] = SIGNALS_CONFIG.map(sig => {
+        let minDist = Infinity;
+        let winner: string | null = null;
+        for (const v of updated) {
+          if (!v.isActive || v.isFinished || !activeIds.includes(v.id)) continue;
+          const d = haversineDistance(sig.lat, sig.lng, v.currentPos[0], v.currentPos[1]);
+          if (d < minDist) { minDist = d; winner = v.id; }
+        }
+        return minDist < GREEN_THRESHOLD_MILES
+          ? { ...sig, status: "green" as const, priorityVehicle: winner }
+          : { ...sig, status: "red" as const, priorityVehicle: null };
+      });
+
+      // Imperative camera follow — no state update
+      const followId = followIdRef.current;
+      if (followId && mapRef.current) {
+        const followed = updated.find(v => v.id === followId);
+        if (followed?.isActive && !followed.isFinished) {
+          const pos = followed.currentPos;
+          const prev = lastFollowPos.current;
+          if (!prev || Math.abs(prev[0] - pos[0]) > 0.0001 || Math.abs(prev[1] - pos[1]) > 0.0001) {
+            lastFollowPos.current = pos;
+            mapRef.current.setView(pos, 15, { animate: true, duration: 0.8, noMoveStart: true });
+          }
+        }
+      }
+
+      vehiclesRef.current = updated;
+
+      // Batch state updates — React batches these in concurrent mode
+      setVehicles([...updated]);
+      setSignals(newSignals);
+
+      onVehiclesRef.current?.(updated);
+      onSignalsRef.current?.(newSignals);
+
+      frameId = requestAnimationFrame(tick);
+    };
+
+    frameId = requestAnimationFrame(tick);
+    return () => cancelAnimationFrame(frameId);
+  }, [vehicles.length]); // start loop when vehicles first populate
+
+  if (!mounted) return <div className="w-full h-full bg-background" />;
+
+  const activeVehicles = vehicles.filter(v => activeVehicleIds.includes(v.id));
+  const fireConfigs = VEHICLES_CONFIG.filter(c => c.type === "fire");
 
   return (
-    <div className="relative w-full h-full">
-      {isLoading && (
-        <div className="absolute inset-0 z-[1000] bg-background/50 backdrop-blur-sm flex items-center justify-center">
-          <Loader2 className="w-10 h-10 text-primary animate-spin" />
-        </div>
-      )}
+    <MapContainer center={MAP_CENTER} zoom={13} className="w-full h-full" zoomControl={false}>
+      <MapRefSetter mapRef={mapRef} />
 
-      {/* Metrics Panel */}
-      {displayAmbulance && (
-        <div className="absolute top-6 right-6 z-[400] pointer-events-auto glass-panel p-4 rounded-xl max-w-sm">
-          <div className="space-y-3">
-            <div className="flex items-center justify-between">
-              <span className="text-xs font-semibold uppercase tracking-wider text-muted-foreground">Vehicle ID</span>
-              <Badge variant="outline" className="font-mono">{displayAmbulance.vehicleId}</Badge>
+      <TileLayer
+        url="https://{s}.basemaps.cartocdn.com/dark_matter_retina/{z}/{x}/{y}{r}.png"
+        attribution='&copy; OpenStreetMap contributors &copy; CARTO'
+      />
+
+      {/* Full route lines (dashed) */}
+      {activeVehicles.map(v => (
+        <Polyline key={`rf-${v.id}`} positions={v.route}
+          color={v.color} weight={2.5} opacity={0.3} dashArray="10 7" />
+      ))}
+
+      {/* Traveled path */}
+      {activeVehicles.map(v => {
+        const pts: [number, number][] = Array.from({ length: 30 }, (_, i) =>
+          interpolateRoute(v.route, (i / 29) * (v.progress / 100)));
+        return <Polyline key={`rd-${v.id}`} positions={pts} color={v.color} weight={5} opacity={0.9} />;
+      })}
+
+      {/* Traffic Signals */}
+      {signals.map(sig => (
+        <Marker key={sig.id} position={[sig.lat, sig.lng]}
+          icon={createSignalIcon(sig.status, sig.priorityVehicle)} zIndexOffset={500}>
+          <Popup>
+            <div style={{ minWidth: 190, padding: "4px 2px" }}>
+              <b style={{ display: "block", marginBottom: 6 }}>🚦 {sig.label}</b>
+              <div style={{ display: "flex", alignItems: "center", gap: 8, fontSize: 13 }}>
+                <span style={{ width: 11, height: 11, borderRadius: "50%", display: "inline-block", background: sig.status === "green" ? "#22c55e" : "#ef4444", boxShadow: sig.status === "green" ? "0 0 8px #22c55e" : "none" }} />
+                <b style={{ textTransform: "uppercase" }}>{sig.status}</b>
+              </div>
+              {sig.priorityVehicle && <div style={{ marginTop: 8, fontSize: 11, color: "#22c55e", fontWeight: 800, letterSpacing: "0.06em" }}>⚡ OVERRIDE — {sig.priorityVehicle}</div>}
             </div>
-            <div className="grid grid-cols-2 gap-3">
-              <div className="bg-slate-900/50 rounded-lg p-2">
-                <p className="text-xs text-muted-foreground mb-1">Speed</p>
-                <p className="text-lg font-bold font-mono">{Math.round(metrics.speed)} <span className="text-xs font-sans">mph</span></p>
-              </div>
-              <div className="bg-slate-900/50 rounded-lg p-2">
-                <p className="text-xs text-muted-foreground mb-1">Distance</p>
-                <p className="text-lg font-bold font-mono">{metrics.distance.toFixed(2)} <span className="text-xs font-sans">mi</span></p>
-              </div>
-            </div>
-            <div className="bg-slate-900/50 rounded-lg p-2">
-              <p className="text-xs text-muted-foreground mb-1">ETA</p>
-              <p className="text-lg font-bold font-mono">{metrics.eta}</p>
-            </div>
-            <div className="space-y-1">
-              <div className="flex justify-between items-center">
-                <span className="text-xs text-muted-foreground">Progress</span>
-                <span className="text-xs font-mono font-semibold">{Math.round(metrics.progress)}%</span>
-              </div>
-              <div className="w-full bg-slate-900 rounded-full h-2 overflow-hidden">
-                <div 
-                  className="h-full bg-gradient-to-r from-primary to-destructive transition-all duration-300"
-                  style={{ width: `${metrics.progress}%` }}
-                />
-              </div>
-            </div>
-          </div>
-        </div>
-      )}
+          </Popup>
+        </Marker>
+      ))}
 
-      {/* Map Header Overlay */}
-      <div className="absolute top-6 left-6 right-6 z-[400] pointer-events-none flex justify-between items-start">
-        <div className="glass-panel p-4 rounded-xl pointer-events-auto">
-          <h2 className="font-display font-bold text-xl neon-text mb-1 uppercase tracking-widest">Live Sector Scan</h2>
-          <div className="flex gap-4 text-xs font-medium uppercase tracking-wider text-muted-foreground">
-            <span className="flex items-center gap-1.5"><div className="w-2 h-2 rounded-full bg-destructive animate-pulse"></div> Active Responders</span>
-            <span className="flex items-center gap-1.5"><div className="w-2 h-2 rounded-full bg-primary"></div> Signals Overridden</span>
-          </div>
-        </div>
-      </div>
-
-      <MapContainer 
-        center={mapCenter} 
-        zoom={15} 
-        className="w-full h-full z-0 bg-background"
-        zoomControl={false}
-      >
-        <MapController center={mapCenter} zoom={15} />
-        <TileLayer
-          url="https://{s}.basemaps.cartocdn.com/dark_all/{z}/{x}/{y}{r}.png"
-          attribution='&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a> contributors &copy; <a href="https://carto.com/attributions">CARTO</a>'
-        />
-
-        {/* Route Polyline */}
-        {route.length > 1 && (
-          <Polyline
-            positions={route}
-            color="rgb(6, 182, 212)"
-            weight={3}
-            opacity={0.7}
-            dashArray="5, 5"
-          />
-        )}
-
-        {hospitals?.map(hospital => (
-          <Marker 
-            key={`h-${hospital.id}`} 
-            position={[hospital.lat, hospital.lng]}
-            icon={createHospitalIcon()}
-          >
-            <Popup className="custom-popup">
-              <div className="p-1">
-                <h3 className="font-bold text-lg mb-1">{hospital.name}</h3>
-                <div className="flex items-center justify-between mt-2 pt-2 border-t border-white/10">
-                  <span className="text-sm text-muted-foreground">Available Beds:</span>
-                  <Badge variant={hospital.availableBeds > 5 ? "default" : "destructive"}>
-                    {hospital.availableBeds}
-                  </Badge>
-                </div>
-              </div>
-            </Popup>
-          </Marker>
-        ))}
-
-        {trafficLights?.map(light => (
-          <Marker 
-            key={`tl-${light.id}`} 
-            position={[light.lat, light.lng]}
-            icon={createTrafficLightIcon(light.status, light.overrideActive)}
-          >
+      {/* Hospitals */}
+      {hospitals?.map(hosp => {
+        const isTarget = activeVehicles.some(v => v.type === "ambulance" && v.destinationName === hosp.name);
+        return (
+          <Marker key={`h-${hosp.id}`} position={[hosp.lat, hosp.lng]}
+            icon={createHospitalIcon(isTarget)} zIndexOffset={300}>
             <Popup>
-              <div className="p-1">
-                <h3 className="font-bold mb-1">Intersection {light.intersection}</h3>
-                <div className="space-y-2 mt-2">
-                  <div className="flex justify-between items-center text-sm">
-                    <span className="text-muted-foreground">Current State:</span>
-                    <Badge className="uppercase" variant="outline">
-                      <span className={`w-2 h-2 rounded-full mr-2 inline-block 
-                        ${light.status === 'green' ? 'bg-emerald-500' : light.status === 'yellow' ? 'bg-amber-400' : 'bg-red-500'}`
-                      }></span>
-                      {light.status}
-                    </Badge>
-                  </div>
-                  {light.overrideActive && (
-                    <div className="bg-primary/20 text-primary px-3 py-1.5 rounded-md text-xs font-semibold uppercase tracking-wider text-center mt-2 animate-pulse">
-                      Emergency Override Active
-                    </div>
-                  )}
-                </div>
+              <div style={{ minWidth: 190, padding: "4px 2px" }}>
+                <b style={{ display: "block", marginBottom: 6 }}>🏥 {hosp.name}</b>
+                <div style={{ fontSize: 13 }}>Available Beds: <b>{hosp.availableBeds}</b></div>
+                {isTarget && <div style={{ marginTop: 8, fontSize: 11, color: "#22d3ee", fontWeight: 800 }}>📍 ACTIVE DESTINATION</div>}
               </div>
             </Popup>
           </Marker>
-        ))}
+        );
+      })}
 
-        {/* Animated Active Ambulance */}
-        {animatedAmbulance && animatedAmbulance.currentPos && (
-          <Marker 
-            key={`a-animated-${animatedAmbulance.id}`} 
-            position={animatedAmbulance.currentPos}
-            icon={createAmbulanceIcon('en-route')}
-            zIndexOffset={2000}
-          >
-            <Popup>
-              <div className="p-2 min-w-[240px]">
-                <div className="flex items-center gap-2 mb-2">
-                  <Badge variant="destructive" className="uppercase">
-                    En Route
-                  </Badge>
-                  <span className="font-mono text-xs text-muted-foreground">ID: {animatedAmbulance.vehicleId}</span>
-                </div>
-                <div className="grid grid-cols-2 gap-2 mt-3 text-sm border-t border-white/10 pt-3">
-                  <div>
-                    <span className="block text-xs text-muted-foreground mb-0.5">Speed</span>
-                    <span className="font-bold font-mono text-lg">{Math.round(animatedAmbulance.baseSpeed)} <span className="text-xs font-sans text-muted-foreground font-normal">mph</span></span>
-                  </div>
-                  <div>
-                    <span className="block text-xs text-muted-foreground mb-0.5">Progress</span>
-                    <span className="font-bold font-mono text-lg">{Math.round(metrics.progress)}%</span>
-                  </div>
-                </div>
-                <div className="mt-3 pt-3 border-t border-white/10">
-                  <p className="text-xs text-muted-foreground mb-1">Destination: {animatedAmbulance.destination?.name}</p>
-                  <p className="text-xs font-mono text-primary">ETA: {metrics.eta}</p>
-                </div>
+      {/* Fire incident markers */}
+      {fireConfigs.map(cfg => (
+        <Marker key={`fi-${cfg.id}`} position={cfg.incidentPos!}
+          icon={createIncidentIcon()} zIndexOffset={400}>
+          <Popup>
+            <div style={{ minWidth: 190, padding: "4px 2px" }}>
+              <b style={{ display: "block", marginBottom: 6 }}>🔥 {cfg.incidentLabel}</b>
+              <div style={{ fontSize: 11, color: "#ef4444", fontWeight: 800 }}>⚠ ACTIVE INCIDENT</div>
+            </div>
+          </Popup>
+        </Marker>
+      ))}
+
+      {/* Fire incident pulse circles */}
+      {fireConfigs.map(cfg => (
+        <Circle key={`fc-${cfg.id}`} center={cfg.incidentPos!} radius={120}
+          pathOptions={{ color: "#ef4444", fillColor: "#ef4444", fillOpacity: 0.07, weight: 1.5, dashArray: "6 5" }} />
+      ))}
+
+      {/* Vehicles */}
+      {activeVehicles.map(v => (
+        <Marker key={`v-${v.id}`} position={v.currentPos}
+          icon={createVehicleIcon(v.icon, v.color, v.isActive && !v.isFinished)} zIndexOffset={1000}>
+          <Popup>
+            <div style={{ minWidth: 210, padding: "4px 2px" }}>
+              <div style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 8 }}>
+                <span style={{ fontSize: 22 }}>{v.icon}</span>
+                <b style={{ fontSize: 15 }}>{v.label}</b>
               </div>
-            </Popup>
-          </Marker>
-        )}
-
-        {/* Other ambulances */}
-        {ambulances?.map(ambulance => {
-          // Skip the animated one
-          if (animatedAmbulance && ambulance.id === animatedAmbulance.id) return null;
-          
-          return (
-            <Marker 
-              key={`a-${ambulance.id}`} 
-              position={[ambulance.lat, ambulance.lng]}
-              icon={createAmbulanceIcon(ambulance.status)}
-              zIndexOffset={1000}
-            >
-              <Popup>
-                <div className="p-1 min-w-[200px]">
-                  <div className="flex items-center gap-2 mb-2">
-                    <Badge variant={ambulance.status === 'en-route' ? 'destructive' : 'default'} className="uppercase">
-                      {ambulance.status.replace('-', ' ')}
-                    </Badge>
-                    <span className="font-mono text-xs text-muted-foreground">ID: {ambulance.vehicleId}</span>
-                  </div>
-                  <div className="grid grid-cols-2 gap-2 mt-3 text-sm border-t border-white/10 pt-3">
-                    <div>
-                      <span className="block text-xs text-muted-foreground mb-0.5">Speed</span>
-                      <span className="font-bold font-mono text-lg">{ambulance.speed} <span className="text-xs font-sans text-muted-foreground font-normal">mph</span></span>
-                    </div>
-                    <div>
-                      <span className="block text-xs text-muted-foreground mb-0.5">Vector</span>
-                      <span className="font-bold font-mono">NNE</span>
-                    </div>
-                  </div>
-                </div>
-              </Popup>
-            </Marker>
-          );
-        })}
-      </MapContainer>
-    </div>
+              <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 10, fontSize: 13 }}>
+                <div><span style={{ color: "#64748b" }}>Speed</span><br /><b>{v.speed} mph</b></div>
+                <div><span style={{ color: "#64748b" }}>Progress</span><br /><b>{Math.round(v.progress)}%</b></div>
+                <div><span style={{ color: "#64748b" }}>Traveled</span><br /><b>{v.distanceTraveled.toFixed(2)} mi</b></div>
+                <div><span style={{ color: "#64748b" }}>Remaining</span><br /><b>{(v.totalDistance - v.distanceTraveled).toFixed(2)} mi</b></div>
+              </div>
+              <div style={{ marginTop: 10, paddingTop: 8, borderTop: "1px solid #1e293b", fontSize: 12, color: "#64748b" }}>→ {v.destinationName}</div>
+              {v.isFinished && <div style={{ marginTop: 6, fontSize: 13, color: "#22c55e", fontWeight: 800 }}>✓ ARRIVED</div>}
+            </div>
+          </Popup>
+        </Marker>
+      ))}
+    </MapContainer>
   );
 }
