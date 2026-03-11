@@ -1,23 +1,16 @@
-import { useEffect, useState, useRef } from "react";
-import { MapContainer, TileLayer, Marker, Popup, useMap, Polyline, Circle } from "react-leaflet";
+import { useEffect, useState, useRef, type MutableRefObject } from "react";
+import { MapContainer, TileLayer, Marker, Popup, useMap, Polyline, Circle, ZoomControl } from "react-leaflet";
 import L from "leaflet";
 import { useHospitals } from "@/hooks/use-hospitals";
 import { VEHICLES_CONFIG, SIGNALS_CONFIG } from "@/lib/simulation-config";
 
-// ─────────────────────────────────────────────────────────────────────────────
-// CONSTANTS
-// ─────────────────────────────────────────────────────────────────────────────
-
-const GREEN_THRESHOLD_MILES = 0.12;
+const GREEN_THRESHOLD_KM = 0.1;
 const ANIMATION_DURATION = 45;
-const MAP_CENTER: [number, number] = [40.7310, -73.9930];
-
-// ─────────────────────────────────────────────────────────────────────────────
-// HELPERS
-// ─────────────────────────────────────────────────────────────────────────────
+const MAP_CENTER: [number, number] = [20.5937, 78.9629];
+const INITIAL_ZOOM = 5;
 
 function haversineDistance(lat1: number, lon1: number, lat2: number, lon2: number): number {
-  const R = 3959;
+  const R = 6371;
   const dLat = (lat2 - lat1) * Math.PI / 180;
   const dLon = (lon2 - lon1) * Math.PI / 180;
   const a = Math.sin(dLat / 2) ** 2 +
@@ -48,9 +41,24 @@ function interpolateRoute(route: [number, number][], t: number): [number, number
   return route[route.length - 1];
 }
 
-// ─────────────────────────────────────────────────────────────────────────────
-// ICON FACTORIES
-// ─────────────────────────────────────────────────────────────────────────────
+async function fetchRoadRoute(start: [number, number], end: [number, number], fallbackOffset = 0): Promise<[number, number][]> {
+  try {
+    const url = `https://router.project-osrm.org/route/v1/driving/${start[1]},${start[0]};${end[1]},${end[0]}?overview=full&geometries=geojson`;
+    const res = await fetch(url);
+    if (!res.ok) throw new Error("OSRM route fetch failed");
+    const data = await res.json();
+    const coords: [number, number][] = data.routes?.[0]?.geometry?.coordinates?.map((point: [number, number]) => [point[1], point[0]]);
+    if (coords?.length > 1) return coords;
+  } catch (error) {
+    console.warn("Routing fallback in use", error);
+  }
+
+  return [
+    start,
+    [(start[0] + end[0]) / 2 + fallbackOffset, (start[1] + end[1]) / 2 - fallbackOffset],
+    end,
+  ];
+}
 
 function createVehicleIcon(emoji: string, color: string, isMoving: boolean) {
   const rings = isMoving ? `
@@ -59,30 +67,32 @@ function createVehicleIcon(emoji: string, color: string, isMoving: boolean) {
   ` : "";
   return L.divIcon({
     className: "bg-transparent border-none",
-    html: `<div style="position:relative;display:flex;align-items:center;justify-content:center;width:48px;height:48px;">
+    html: `<div style="position:relative;display:flex;align-items:center;justify-content:center;width:44px;height:44px;">
       ${rings}
-      <div style="width:42px;height:42px;border-radius:50%;background:rgba(2,6,23,0.93);border:2.5px solid ${color};box-shadow:0 0 18px ${color},0 0 36px ${color}44;display:flex;align-items:center;justify-content:center;font-size:22px;line-height:1;">${emoji}</div>
+      <div style="width:38px;height:38px;border-radius:50%;background:rgba(2,6,23,0.93);border:2px solid ${color};box-shadow:0 0 16px ${color},0 0 28px ${color}44;display:flex;align-items:center;justify-content:center;font-size:20px;line-height:1;">${emoji}</div>
     </div>`,
-    iconSize: [48, 48],
-    iconAnchor: [24, 24],
+    iconSize: [44, 44],
+    iconAnchor: [22, 22],
   });
 }
 
 function createSignalIcon(status: "red" | "yellow" | "green", priorityVehicle: string | null) {
   const dot = status === "green" ? "#22c55e" : "#ef4444";
-  const glow = status === "green" ? "0 0 12px #22c55e,0 0 24px #22c55e88" : "none";
   const border = status === "green" ? "#22c55e" : "#334155";
   const tag = priorityVehicle && status === "green"
     ? `<div style="background:#22c55e;color:#fff;font-size:7px;font-weight:800;padding:1px 4px;border-radius:3px;white-space:nowrap;margin-bottom:2px;letter-spacing:0.05em;">⚡ ${priorityVehicle}</div>` : "";
+
   return L.divIcon({
     className: "bg-transparent border-none",
     html: `<div style="display:flex;flex-direction:column;align-items:center;gap:2px;">${tag}
-      <div style="width:26px;height:26px;border-radius:50%;background:rgba(2,6,23,0.96);border:2px solid ${border};box-shadow:${glow};display:flex;align-items:center;justify-content:center;">
-        <div style="width:13px;height:13px;border-radius:50%;background:${dot};box-shadow:0 0 6px ${dot}cc;"></div>
+      <div style="width:26px;height:36px;border-radius:8px;background:rgba(2,6,23,0.96);border:1.5px solid ${border};display:flex;flex-direction:column;align-items:center;justify-content:center;gap:3px;padding:3px 0;">
+        <div style="width:8px;height:8px;border-radius:50%;background:${status === "red" ? dot : "#334155"};box-shadow:${status === "red" ? "0 0 8px #ef4444" : "none"};" class="traffic-light-dot"></div>
+        <div style="width:8px;height:8px;border-radius:50%;background:${status === "yellow" ? "#eab308" : "#334155"};"></div>
+        <div style="width:8px;height:8px;border-radius:50%;background:${status === "green" ? dot : "#334155"};box-shadow:${status === "green" ? "0 0 8px #22c55e" : "none"};" class="traffic-light-dot"></div>
       </div>
     </div>`,
-    iconSize: [26, priorityVehicle && status === "green" ? 46 : 30],
-    iconAnchor: [13, 13],
+    iconSize: [28, priorityVehicle && status === "green" ? 54 : 42],
+    iconAnchor: [14, 21],
   });
 }
 
@@ -91,40 +101,28 @@ function createHospitalIcon(isTarget: boolean) {
     ? `<div class="leaflet-ping-ring" style="position:absolute;inset:0;border-radius:12px;border:2px solid #22d3ee;opacity:0.6;"></div>` : "";
   return L.divIcon({
     className: "bg-transparent border-none",
-    html: `<div style="position:relative;display:flex;align-items:center;justify-content:center;width:50px;height:50px;">${ring}
-      <div style="width:44px;height:44px;border-radius:12px;background:rgba(2,6,23,0.93);border:2px solid ${isTarget ? "#22d3ee" : "#334155"};box-shadow:${isTarget ? "0 0 20px rgba(34,211,238,0.5)" : "none"};display:flex;align-items:center;justify-content:center;font-size:24px;">🏥</div>
+    html: `<div style="position:relative;display:flex;align-items:center;justify-content:center;width:44px;height:44px;">${ring}
+      <div style="width:36px;height:36px;border-radius:10px;background:rgba(2,6,23,0.93);border:2px solid ${isTarget ? "#22d3ee" : "#334155"};box-shadow:${isTarget ? "0 0 20px rgba(34,211,238,0.5)" : "none"};display:flex;align-items:center;justify-content:center;font-size:20px;">🏥</div>
     </div>`,
-    iconSize: [50, 50],
-    iconAnchor: [25, 25],
+    iconSize: [44, 44],
+    iconAnchor: [22, 22],
   });
 }
 
 function createIncidentIcon() {
   return L.divIcon({
     className: "bg-transparent border-none",
-    html: `<div style="position:relative;display:flex;align-items:center;justify-content:center;width:54px;height:54px;">
-      <div class="leaflet-ping-ring" style="position:absolute;inset:0;border-radius:50%;border:2px solid #ef4444;opacity:0.7;"></div>
-      <div class="leaflet-ping-ring" style="position:absolute;inset:-8px;border-radius:50%;border:1.5px solid #ef4444;opacity:0.4;animation-delay:0.5s;"></div>
-      <div style="width:46px;height:46px;border-radius:50%;background:rgba(2,6,23,0.92);border:2.5px solid #ef4444;box-shadow:0 0 20px rgba(239,68,68,0.8),0 0 40px rgba(239,68,68,0.3);display:flex;align-items:center;justify-content:center;font-size:24px;">🔥</div>
-    </div>`,
-    iconSize: [54, 54],
-    iconAnchor: [27, 27],
+    html: `<div class="fire-pulse" style="width:42px;height:42px;border-radius:50%;display:flex;align-items:center;justify-content:center;background:rgba(239,68,68,0.12);border:1.5px solid rgba(239,68,68,0.5);font-size:22px;">🔥</div>`,
+    iconSize: [42, 42],
+    iconAnchor: [21, 21],
   });
 }
 
-// ─────────────────────────────────────────────────────────────────────────────
-// MAP REF SETTER — grabs Leaflet map instance imperatively
-// ─────────────────────────────────────────────────────────────────────────────
-
-function MapRefSetter({ mapRef }: { mapRef: React.MutableRefObject<L.Map | null> }) {
+function MapRefSetter({ mapRef }: { mapRef: MutableRefObject<L.Map | null> }) {
   const map = useMap();
   mapRef.current = map;
   return null;
 }
-
-// ─────────────────────────────────────────────────────────────────────────────
-// TYPES
-// ─────────────────────────────────────────────────────────────────────────────
 
 export type VehicleState = {
   id: string;
@@ -153,10 +151,6 @@ export type SignalState = {
   priorityVehicle: string | null;
 };
 
-// ─────────────────────────────────────────────────────────────────────────────
-// MAP VIEW
-// ─────────────────────────────────────────────────────────────────────────────
-
 interface MapViewProps {
   followVehicleId?: string | null;
   activeVehicleIds: string[];
@@ -170,13 +164,12 @@ export function MapView({ followVehicleId, activeVehicleIds, onVehiclesUpdate, o
   const [vehicles, setVehicles] = useState<VehicleState[]>([]);
   const [signals, setSignals] = useState<SignalState[]>([]);
 
-  // Stable refs — avoid stale closures without triggering re-renders
   const vehiclesRef = useRef<VehicleState[]>([]);
   const activeIdsRef = useRef<string[]>(activeVehicleIds);
   const followIdRef = useRef<string | null>(followVehicleId ?? null);
   const onVehiclesRef = useRef(onVehiclesUpdate);
   const onSignalsRef = useRef(onSignalsUpdate);
-  const mapRef = useRef<L.Map | null>(null); // Leaflet map instance for imperative pan
+  const mapRef = useRef<L.Map | null>(null);
   const lastFollowPos = useRef<[number, number] | null>(null);
   const animStarted = useRef(false);
   const initializedRef = useRef(false);
@@ -187,52 +180,68 @@ export function MapView({ followVehicleId, activeVehicleIds, onVehiclesUpdate, o
   useEffect(() => { onVehiclesRef.current = onVehiclesUpdate; }, [onVehiclesUpdate]);
   useEffect(() => { onSignalsRef.current = onSignalsUpdate; }, [onSignalsUpdate]);
 
-  // Initialize vehicles once hospitals load
   useEffect(() => {
     if (!hospitals || hospitals.length === 0 || initializedRef.current) return;
     initializedRef.current = true;
 
     setSignals(SIGNALS_CONFIG.map(s => ({ ...s, status: "red" as const, priorityVehicle: null })));
 
-    const now = Date.now();
-    const built: VehicleState[] = VEHICLES_CONFIG.map((cfg, idx) => {
-      let destPos: [number, number];
-      let destName: string;
-      if (cfg.destinationType === "hospital") {
-        const hosp = hospitals[Math.min(cfg.destinationIndex, hospitals.length - 1)];
-        destPos = [hosp.lat, hosp.lng];
-        destName = hosp.name;
-      } else {
-        destPos = cfg.incidentPos!;
-        destName = cfg.incidentLabel ?? "Fire Incident";
-      }
+    const buildVehicles = async () => {
+      const now = Date.now();
+      const built = await Promise.all(VEHICLES_CONFIG.map(async (cfg, idx) => {
+        let destPos: [number, number];
+        let destName: string;
 
-      const route: [number, number][] = [
-        cfg.startPos,
-        [(cfg.startPos[0] + destPos[0]) / 2 + (idx % 2 === 0 ? 0.003 : -0.003),
-         (cfg.startPos[1] + destPos[1]) / 2 + (idx % 2 === 0 ? -0.002 : 0.002)],
-        destPos,
-      ];
+        if (cfg.destinationType === "hospital") {
+          const nearestHospital = hospitals.reduce((closest, hospital) => {
+            const nextDistance = haversineDistance(cfg.startPos[0], cfg.startPos[1], hospital.lat, hospital.lng);
+            if (!closest || nextDistance < closest.distance) {
+              return { hospital, distance: nextDistance };
+            }
+            return closest;
+          }, null as { hospital: typeof hospitals[number]; distance: number } | null);
 
-      let total = 0;
-      for (let i = 0; i < route.length - 1; i++) {
-        total += haversineDistance(route[i][0], route[i][1], route[i + 1][0], route[i + 1][1]);
-      }
+          const hospital = nearestHospital?.hospital ?? hospitals[0];
+          destPos = [hospital.lat, hospital.lng];
+          destName = hospital.name;
+        } else {
+          destPos = cfg.incidentPos!;
+          destName = cfg.incidentLabel ?? "Fire Incident";
+        }
 
-      return {
-        id: cfg.id, type: cfg.type, label: cfg.label, icon: cfg.icon,
-        color: cfg.color, speed: cfg.speed, route,
-        currentPos: cfg.startPos, progress: 0, distanceTraveled: 0,
-        totalDistance: total, isActive: true, isFinished: false,
-        destinationName: destName, startedAt: now + idx * 3500,
-      };
-    });
+        const route = await fetchRoadRoute(cfg.startPos, destPos, idx % 2 === 0 ? 0.003 : -0.003);
 
-    vehiclesRef.current = built;
-    setVehicles(built);
+        let total = 0;
+        for (let i = 0; i < route.length - 1; i++) {
+          total += haversineDistance(route[i][0], route[i][1], route[i + 1][0], route[i + 1][1]);
+        }
+
+        return {
+          id: cfg.id,
+          type: cfg.type,
+          label: cfg.label,
+          icon: cfg.icon,
+          color: cfg.color,
+          speed: cfg.speed,
+          route,
+          currentPos: cfg.startPos,
+          progress: 0,
+          distanceTraveled: 0,
+          totalDistance: total,
+          isActive: true,
+          isFinished: false,
+          destinationName: destName,
+          startedAt: now + idx * 2500,
+        };
+      }));
+
+      vehiclesRef.current = built;
+      setVehicles(built);
+    };
+
+    buildVehicles();
   }, [hospitals]);
 
-  // Animation loop — starts once, uses refs for all mutable values
   useEffect(() => {
     if (animStarted.current || vehiclesRef.current.length === 0) return;
     animStarted.current = true;
@@ -247,23 +256,29 @@ export function MapView({ followVehicleId, activeVehicleIds, onVehiclesUpdate, o
         if (!activeIds.includes(v.id)) return { ...v, isActive: false };
         if (v.isFinished) return { ...v, isActive: true };
         const t = Math.min(Math.max(0, (now - v.startedAt) / 1000) / ANIMATION_DURATION, 1);
-        return { ...v, currentPos: interpolateRoute(v.route, t), progress: t * 100, distanceTraveled: t * v.totalDistance, isActive: true, isFinished: t >= 1 };
+        return {
+          ...v,
+          currentPos: interpolateRoute(v.route, t),
+          progress: t * 100,
+          distanceTraveled: t * v.totalDistance,
+          isActive: true,
+          isFinished: t >= 1,
+        };
       });
 
       const newSignals: SignalState[] = SIGNALS_CONFIG.map(sig => {
         let minDist = Infinity;
         let winner: string | null = null;
         for (const v of updated) {
-          if (!v.isActive || v.isFinished || !activeIds.includes(v.id)) continue;
+          if (!v.isActive || v.isFinished || !activeIds.includes(v.id) || v.type !== "ambulance") continue;
           const d = haversineDistance(sig.lat, sig.lng, v.currentPos[0], v.currentPos[1]);
           if (d < minDist) { minDist = d; winner = v.id; }
         }
-        return minDist < GREEN_THRESHOLD_MILES
+        return minDist < GREEN_THRESHOLD_KM
           ? { ...sig, status: "green" as const, priorityVehicle: winner }
           : { ...sig, status: "red" as const, priorityVehicle: null };
       });
 
-      // Imperative camera follow — no state update
       const followId = followIdRef.current;
       if (followId && mapRef.current) {
         const followed = updated.find(v => v.id === followId);
@@ -272,17 +287,14 @@ export function MapView({ followVehicleId, activeVehicleIds, onVehiclesUpdate, o
           const prev = lastFollowPos.current;
           if (!prev || Math.abs(prev[0] - pos[0]) > 0.0001 || Math.abs(prev[1] - pos[1]) > 0.0001) {
             lastFollowPos.current = pos;
-            mapRef.current.setView(pos, 15, { animate: true, duration: 0.8, noMoveStart: true });
+            mapRef.current.setView(pos, Math.max(mapRef.current.getZoom(), 14), { animate: true, duration: 0.8, noMoveStart: true });
           }
         }
       }
 
       vehiclesRef.current = updated;
-
-      // Batch state updates — React batches these in concurrent mode
       setVehicles([...updated]);
       setSignals(newSignals);
-
       onVehiclesRef.current?.(updated);
       onSignalsRef.current?.(newSignals);
 
@@ -291,7 +303,7 @@ export function MapView({ followVehicleId, activeVehicleIds, onVehiclesUpdate, o
 
     frameId = requestAnimationFrame(tick);
     return () => cancelAnimationFrame(frameId);
-  }, [vehicles.length]); // start loop when vehicles first populate
+  }, [vehicles.length]);
 
   if (!mounted) return <div className="w-full h-full bg-background" />;
 
@@ -299,28 +311,26 @@ export function MapView({ followVehicleId, activeVehicleIds, onVehiclesUpdate, o
   const fireConfigs = VEHICLES_CONFIG.filter(c => c.type === "fire");
 
   return (
-    <MapContainer center={MAP_CENTER} zoom={13} className="w-full h-full" zoomControl={false}>
+    <MapContainer center={MAP_CENTER} zoom={INITIAL_ZOOM} className="w-full h-full" zoomControl={false} preferCanvas>
       <MapRefSetter mapRef={mapRef} />
+      <ZoomControl position="topright" />
 
       <TileLayer
-        url="https://{s}.basemaps.cartocdn.com/dark_matter_retina/{z}/{x}/{y}{r}.png"
-        attribution='&copy; OpenStreetMap contributors &copy; CARTO'
+        url="https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png"
+        attribution='&copy; OpenStreetMap contributors'
       />
 
-      {/* Full route lines (dashed) */}
       {activeVehicles.map(v => (
         <Polyline key={`rf-${v.id}`} positions={v.route}
-          color={v.color} weight={2.5} opacity={0.3} dashArray="10 7" />
+          color={v.color} weight={2.5} opacity={0.25} dashArray="8 6" />
       ))}
 
-      {/* Traveled path */}
       {activeVehicles.map(v => {
-        const pts: [number, number][] = Array.from({ length: 30 }, (_, i) =>
-          interpolateRoute(v.route, (i / 29) * (v.progress / 100)));
-        return <Polyline key={`rd-${v.id}`} positions={pts} color={v.color} weight={5} opacity={0.9} />;
+        const pts: [number, number][] = Array.from({ length: 40 }, (_, i) =>
+          interpolateRoute(v.route, (i / 39) * (v.progress / 100)));
+        return <Polyline key={`rd-${v.id}`} positions={pts} color={v.color} weight={4.5} opacity={0.95} />;
       })}
 
-      {/* Traffic Signals */}
       {signals.map(sig => (
         <Marker key={sig.id} position={[sig.lat, sig.lng]}
           icon={createSignalIcon(sig.status, sig.priorityVehicle)} zIndexOffset={500}>
@@ -328,7 +338,7 @@ export function MapView({ followVehicleId, activeVehicleIds, onVehiclesUpdate, o
             <div style={{ minWidth: 190, padding: "4px 2px" }}>
               <b style={{ display: "block", marginBottom: 6 }}>🚦 {sig.label}</b>
               <div style={{ display: "flex", alignItems: "center", gap: 8, fontSize: 13 }}>
-                <span style={{ width: 11, height: 11, borderRadius: "50%", display: "inline-block", background: sig.status === "green" ? "#22c55e" : "#ef4444", boxShadow: sig.status === "green" ? "0 0 8px #22c55e" : "none" }} />
+                <span style={{ width: 11, height: 11, borderRadius: "50%", display: "inline-block", background: sig.status === "green" ? "#22c55e" : "#ef4444", boxShadow: sig.status === "green" ? "0 0 8px #22c55e" : "0 0 8px #ef4444" }} />
                 <b style={{ textTransform: "uppercase" }}>{sig.status}</b>
               </div>
               {sig.priorityVehicle && <div style={{ marginTop: 8, fontSize: 11, color: "#22c55e", fontWeight: 800, letterSpacing: "0.06em" }}>⚡ OVERRIDE — {sig.priorityVehicle}</div>}
@@ -337,7 +347,6 @@ export function MapView({ followVehicleId, activeVehicleIds, onVehiclesUpdate, o
         </Marker>
       ))}
 
-      {/* Hospitals */}
       {hospitals?.map(hosp => {
         const isTarget = activeVehicles.some(v => v.type === "ambulance" && v.destinationName === hosp.name);
         return (
@@ -347,14 +356,13 @@ export function MapView({ followVehicleId, activeVehicleIds, onVehiclesUpdate, o
               <div style={{ minWidth: 190, padding: "4px 2px" }}>
                 <b style={{ display: "block", marginBottom: 6 }}>🏥 {hosp.name}</b>
                 <div style={{ fontSize: 13 }}>Available Beds: <b>{hosp.availableBeds}</b></div>
-                {isTarget && <div style={{ marginTop: 8, fontSize: 11, color: "#22d3ee", fontWeight: 800 }}>📍 ACTIVE DESTINATION</div>}
+                {isTarget && <div style={{ marginTop: 8, fontSize: 11, color: "#22d3ee", fontWeight: 800 }}>📍 NEAREST DESTINATION</div>}
               </div>
             </Popup>
           </Marker>
         );
       })}
 
-      {/* Fire incident markers */}
       {fireConfigs.map(cfg => (
         <Marker key={`fi-${cfg.id}`} position={cfg.incidentPos!}
           icon={createIncidentIcon()} zIndexOffset={400}>
@@ -367,13 +375,11 @@ export function MapView({ followVehicleId, activeVehicleIds, onVehiclesUpdate, o
         </Marker>
       ))}
 
-      {/* Fire incident pulse circles */}
       {fireConfigs.map(cfg => (
-        <Circle key={`fc-${cfg.id}`} center={cfg.incidentPos!} radius={120}
-          pathOptions={{ color: "#ef4444", fillColor: "#ef4444", fillOpacity: 0.07, weight: 1.5, dashArray: "6 5" }} />
+        <Circle key={`fc-${cfg.id}`} center={cfg.incidentPos!} radius={140}
+          pathOptions={{ color: "#ef4444", fillColor: "#ef4444", fillOpacity: 0.1, weight: 1.5, dashArray: "5 4" }} />
       ))}
 
-      {/* Vehicles */}
       {activeVehicles.map(v => (
         <Marker key={`v-${v.id}`} position={v.currentPos}
           icon={createVehicleIcon(v.icon, v.color, v.isActive && !v.isFinished)} zIndexOffset={1000}>
@@ -386,8 +392,8 @@ export function MapView({ followVehicleId, activeVehicleIds, onVehiclesUpdate, o
               <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 10, fontSize: 13 }}>
                 <div><span style={{ color: "#64748b" }}>Speed</span><br /><b>{v.speed} mph</b></div>
                 <div><span style={{ color: "#64748b" }}>Progress</span><br /><b>{Math.round(v.progress)}%</b></div>
-                <div><span style={{ color: "#64748b" }}>Traveled</span><br /><b>{v.distanceTraveled.toFixed(2)} mi</b></div>
-                <div><span style={{ color: "#64748b" }}>Remaining</span><br /><b>{(v.totalDistance - v.distanceTraveled).toFixed(2)} mi</b></div>
+                <div><span style={{ color: "#64748b" }}>Traveled</span><br /><b>{v.distanceTraveled.toFixed(2)} km</b></div>
+                <div><span style={{ color: "#64748b" }}>Remaining</span><br /><b>{(v.totalDistance - v.distanceTraveled).toFixed(2)} km</b></div>
               </div>
               <div style={{ marginTop: 10, paddingTop: 8, borderTop: "1px solid #1e293b", fontSize: 12, color: "#64748b" }}>→ {v.destinationName}</div>
               {v.isFinished && <div style={{ marginTop: 6, fontSize: 13, color: "#22c55e", fontWeight: 800 }}>✓ ARRIVED</div>}

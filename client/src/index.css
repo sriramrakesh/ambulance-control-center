@@ -121,3 +121,20 @@
 .leaflet-bar a:hover {
   background-color: hsl(var(--secondary)) !important;
 }
+
+
+@keyframes traffic-glow {
+  0%, 100% { transform: scale(1); opacity: 0.9; }
+  50% { transform: scale(1.18); opacity: 1; }
+}
+.traffic-light-dot {
+  animation: traffic-glow 0.8s ease-in-out infinite;
+}
+
+@keyframes fire-pulse {
+  0%, 100% { box-shadow: 0 0 0 0 rgba(239, 68, 68, 0.45); transform: scale(1); }
+  70% { box-shadow: 0 0 0 12px rgba(239, 68, 68, 0); transform: scale(1.08); }
+}
+.fire-pulse {
+  animation: fire-pulse 1.4s ease-out infinite;
+}

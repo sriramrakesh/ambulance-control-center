@@ -19,9 +19,9 @@ async function seedDatabase() {
     await storage.createTrafficLight({ intersection: "Park Ave & 59th St", lat: 40.7629, lng: -73.9686, status: "red", overrideActive: false });
 
     // Seed Hospitals
-    await storage.createHospital({ name: "NYU Langone Health", lat: 40.7419, lng: -73.9739, availableBeds: 12 });
-    await storage.createHospital({ name: "Mount Sinai Hospital", lat: 40.7898, lng: -73.9530, availableBeds: 5 });
-    await storage.createHospital({ name: "Bellevue Hospital", lat: 40.7391, lng: -73.9749, availableBeds: 24 });
+    await storage.createHospital({ name: "AIIMS Nagpur", lat: 21.1702, lng: 79.0495, availableBeds: 18 });
+    await storage.createHospital({ name: "Care Hospitals Nagpur", lat: 21.1415, lng: 79.0820, availableBeds: 11 });
+    await storage.createHospital({ name: "Kingsway Hospital", lat: 21.1539, lng: 79.0832, availableBeds: 22 });
 
     // Seed Alerts
     await storage.createAlert({ title: "Emergency Dispatch", description: "AMB-01 dispatched to severe traffic accident at Broadway & Wall St.", severity: "critical" });
