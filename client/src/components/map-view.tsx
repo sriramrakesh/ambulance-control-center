@@ -5,7 +5,8 @@ import { useHospitals } from "@/hooks/use-hospitals";
 import { VEHICLES_CONFIG, SIGNALS_CONFIG } from "@/lib/simulation-config";
 
 const GREEN_THRESHOLD_KM = 0.1;
-const ANIMATION_DURATION = 45;
+const SIGNAL_RESET_DELAY_MS = 2500;
+const VEHICLE_MIN_SEPARATION_KM = 0.045;
 const MAP_CENTER: [number, number] = [20.5937, 78.9629];
 const INITIAL_ZOOM = 5;
 
@@ -39,6 +40,45 @@ function interpolateRoute(route: [number, number][], t: number): [number, number
     target -= segs[i];
   }
   return route[route.length - 1];
+}
+
+
+
+function offsetRoute(route: [number, number][], laneOffset = 0): [number, number][] {
+  if (Math.abs(laneOffset) < 0.00001 || route.length < 2) return route;
+  return route.map((point, index) => {
+    const prev = route[Math.max(0, index - 1)];
+    const next = route[Math.min(route.length - 1, index + 1)];
+    const dLat = next[0] - prev[0];
+    const dLng = next[1] - prev[1];
+    const magnitude = Math.hypot(dLat, dLng) || 1;
+    const perpLat = -dLng / magnitude;
+    const perpLng = dLat / magnitude;
+    return [point[0] + perpLat * laneOffset, point[1] + perpLng * laneOffset] as [number, number];
+  });
+}
+
+function spreadVehicles(vehicles: VehicleState[]): VehicleState[] {
+  const adjusted = vehicles.map((vehicle) => ({ ...vehicle }));
+
+  for (let i = 0; i < adjusted.length; i++) {
+    for (let j = i + 1; j < adjusted.length; j++) {
+      const first = adjusted[i];
+      const second = adjusted[j];
+      if (!first.isActive || !second.isActive) continue;
+
+      const distance = haversineDistance(first.currentPos[0], first.currentPos[1], second.currentPos[0], second.currentPos[1]);
+      if (distance >= VEHICLE_MIN_SEPARATION_KM) continue;
+
+      const shift = 0.00012;
+      adjusted[j] = {
+        ...second,
+        currentPos: [second.currentPos[0] + shift * (j % 2 === 0 ? 1 : -1), second.currentPos[1] - shift * (j % 2 === 0 ? -1 : 1)],
+      };
+    }
+  }
+
+  return adjusted;
 }
 
 async function fetchRoadRoute(start: [number, number], end: [number, number], fallbackOffset = 0): Promise<[number, number][]> {
@@ -140,6 +180,7 @@ export type VehicleState = {
   isFinished: boolean;
   destinationName: string;
   startedAt: number;
+  animationDurationSec: number;
 };
 
 export type SignalState = {
@@ -149,6 +190,7 @@ export type SignalState = {
   label: string;
   status: "red" | "yellow" | "green";
   priorityVehicle: string | null;
+  greenUntil: number;
 };
 
 interface MapViewProps {
@@ -169,6 +211,7 @@ export function MapView({ followVehicleId, activeVehicleIds, onVehiclesUpdate, o
   const followIdRef = useRef<string | null>(followVehicleId ?? null);
   const onVehiclesRef = useRef(onVehiclesUpdate);
   const onSignalsRef = useRef(onSignalsUpdate);
+  const signalsRef = useRef<SignalState[]>([]);
   const mapRef = useRef<L.Map | null>(null);
   const lastFollowPos = useRef<[number, number] | null>(null);
   const animStarted = useRef(false);
@@ -179,12 +222,13 @@ export function MapView({ followVehicleId, activeVehicleIds, onVehiclesUpdate, o
   useEffect(() => { followIdRef.current = followVehicleId ?? null; }, [followVehicleId]);
   useEffect(() => { onVehiclesRef.current = onVehiclesUpdate; }, [onVehiclesUpdate]);
   useEffect(() => { onSignalsRef.current = onSignalsUpdate; }, [onSignalsUpdate]);
+  useEffect(() => { signalsRef.current = signals; }, [signals]);
 
   useEffect(() => {
     if (!hospitals || hospitals.length === 0 || initializedRef.current) return;
     initializedRef.current = true;
 
-    setSignals(SIGNALS_CONFIG.map(s => ({ ...s, status: "red" as const, priorityVehicle: null })));
+    setSignals(SIGNALS_CONFIG.map(s => ({ ...s, status: "red" as const, priorityVehicle: null, greenUntil: 0 })));
 
     const buildVehicles = async () => {
       const now = Date.now();
@@ -209,7 +253,8 @@ export function MapView({ followVehicleId, activeVehicleIds, onVehiclesUpdate, o
           destName = cfg.incidentLabel ?? "Fire Incident";
         }
 
-        const route = await fetchRoadRoute(cfg.startPos, destPos, idx % 2 === 0 ? 0.003 : -0.003);
+        const baseRoute = await fetchRoadRoute(cfg.startPos, destPos, idx % 2 === 0 ? 0.003 : -0.003);
+        const route = offsetRoute(baseRoute, (idx - 1) * 0.00018);
 
         let total = 0;
         for (let i = 0; i < route.length - 1; i++) {
@@ -232,6 +277,7 @@ export function MapView({ followVehicleId, activeVehicleIds, onVehiclesUpdate, o
           isFinished: false,
           destinationName: destName,
           startedAt: now + idx * 2500,
+          animationDurationSec: Math.max(22, Math.min(140, (total / (cfg.speed * 1.609)) * 3600)),
         };
       }));
 
@@ -255,7 +301,7 @@ export function MapView({ followVehicleId, activeVehicleIds, onVehiclesUpdate, o
       const updated: VehicleState[] = vehiclesRef.current.map(v => {
         if (!activeIds.includes(v.id)) return { ...v, isActive: false };
         if (v.isFinished) return { ...v, isActive: true };
-        const t = Math.min(Math.max(0, (now - v.startedAt) / 1000) / ANIMATION_DURATION, 1);
+        const t = Math.min(Math.max(0, (now - v.startedAt) / 1000) / v.animationDurationSec, 1);
         return {
           ...v,
           currentPos: interpolateRoute(v.route, t),
@@ -266,22 +312,37 @@ export function MapView({ followVehicleId, activeVehicleIds, onVehiclesUpdate, o
         };
       });
 
-      const newSignals: SignalState[] = SIGNALS_CONFIG.map(sig => {
+      const spacedVehicles = spreadVehicles(updated);
+
+      const previousById = new Map(signalsRef.current.map((signal) => [signal.id, signal]));
+      const newSignals: SignalState[] = SIGNALS_CONFIG.map((sig) => {
         let minDist = Infinity;
         let winner: string | null = null;
-        for (const v of updated) {
-          if (!v.isActive || v.isFinished || !activeIds.includes(v.id) || v.type !== "ambulance") continue;
-          const d = haversineDistance(sig.lat, sig.lng, v.currentPos[0], v.currentPos[1]);
-          if (d < minDist) { minDist = d; winner = v.id; }
+
+        for (const vehicle of spacedVehicles) {
+          if (!vehicle.isActive || vehicle.isFinished || !activeIds.includes(vehicle.id) || vehicle.type !== "ambulance") continue;
+          const distance = haversineDistance(sig.lat, sig.lng, vehicle.currentPos[0], vehicle.currentPos[1]);
+          if (distance < minDist) {
+            minDist = distance;
+            winner = vehicle.id;
+          }
         }
-        return minDist < GREEN_THRESHOLD_KM
-          ? { ...sig, status: "green" as const, priorityVehicle: winner }
-          : { ...sig, status: "red" as const, priorityVehicle: null };
+
+        const previousSignal = previousById.get(sig.id);
+        if (minDist <= GREEN_THRESHOLD_KM && winner) {
+          return { ...sig, status: "green" as const, priorityVehicle: winner, greenUntil: now + SIGNAL_RESET_DELAY_MS };
+        }
+
+        if ((previousSignal?.greenUntil ?? 0) > now) {
+          return { ...sig, status: "green" as const, priorityVehicle: previousSignal?.priorityVehicle ?? null, greenUntil: previousSignal?.greenUntil ?? 0 };
+        }
+
+        return { ...sig, status: "red" as const, priorityVehicle: null, greenUntil: 0 };
       });
 
       const followId = followIdRef.current;
       if (followId && mapRef.current) {
-        const followed = updated.find(v => v.id === followId);
+        const followed = spacedVehicles.find(v => v.id === followId);
         if (followed?.isActive && !followed.isFinished) {
           const pos = followed.currentPos;
           const prev = lastFollowPos.current;
@@ -292,10 +353,10 @@ export function MapView({ followVehicleId, activeVehicleIds, onVehiclesUpdate, o
         }
       }
 
-      vehiclesRef.current = updated;
-      setVehicles([...updated]);
+      vehiclesRef.current = spacedVehicles;
+      setVehicles([...spacedVehicles]);
       setSignals(newSignals);
-      onVehiclesRef.current?.(updated);
+      onVehiclesRef.current?.(spacedVehicles);
       onSignalsRef.current?.(newSignals);
 
       frameId = requestAnimationFrame(tick);

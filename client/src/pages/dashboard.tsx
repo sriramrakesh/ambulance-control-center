@@ -100,14 +100,24 @@ export default function Dashboard() {
           </div>
 
           <CollapsibleSection title="LIVE MAP" defaultOpen>
-            <p style={{ fontSize: 11, color: "#94a3b8", lineHeight: 1.5 }}>OpenStreetMap road routing active. Ambulances auto-route to nearest hospitals and fire engines to incident markers.</p>
+            <p style={{ fontSize: 11, color: "#94a3b8", lineHeight: 1.5 }}>OpenStreetMap routing is active. Emergency vehicles follow road-based routes, hospitals remain visible, and fire incidents are highlighted for dispatch.</p>
           </CollapsibleSection>
 
           <CollapsibleSection title="ALERTS LOG" defaultOpen>
-            <p style={{ fontSize: 11, color: "#94a3b8" }}>Real-time traffic-signal overrides trigger when ambulances are within 100m intersections.</p>
+            <ul style={{ fontSize: 11, color: "#94a3b8", display: "grid", gap: 4, lineHeight: 1.5 }}>
+              <li>• Ambulance dispatched</li>
+              <li>• Fire engine responding</li>
+              <li>• Traffic signal cleared</li>
+            </ul>
           </CollapsibleSection>
 
           <CollapsibleSection title="ANALYTICS" defaultOpen>
+            <div style={{ display: "grid", gap: 8, marginBottom: 8, fontSize: 10 }}>
+              <div style={{ background: "#020617", border: "1px solid #1e293b", borderRadius: 8, padding: 8 }}>TOTAL ACTIVE VEHICLES <b style={{ color: "#22d3ee" }}>{activeCount}</b></div>
+              <div style={{ background: "#020617", border: "1px solid #1e293b", borderRadius: 8, padding: 8 }}>AVERAGE RESPONSE TIME <b style={{ color: "#a78bfa" }}>8.4 min</b></div>
+              <div style={{ background: "#020617", border: "1px solid #1e293b", borderRadius: 8, padding: 8 }}>SIGNALS CLEARED <b style={{ color: "#22c55e" }}>{signalStates.filter((s) => s.status === "green").length}</b></div>
+              <div style={{ background: "#020617", border: "1px solid #1e293b", borderRadius: 8, padding: 8 }}>EMERGENCIES HANDLED <b style={{ color: "#f97316" }}>{arrivedCount}</b></div>
+            </div>
             <SignalPanel signals={signalStates} />
           </CollapsibleSection>
         </div>
