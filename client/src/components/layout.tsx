@@ -24,45 +24,77 @@ const navItems = [
 ];
 
 export function Layout({ children }: LayoutProps) {
-  const [location] = useLocation();
-  const [collapsed, setCollapsed] = useState<Record<string, boolean>>({});
+  const [location, navigate] = useLocation();
+  const [collapsedSections, setCollapsedSections] = useState<Record<string, boolean>>({});
+  const [sidebarCollapsed, setSidebarCollapsed] = useState(false);
 
-  const SidebarContent = () => (
+  const sectionPreview: Record<string, string[]> = {
+    "/": ["Vehicle map", "Hospital markers", "Road routing"],
+    "/alerts": ["Ambulance dispatched", "Fire engine responding", "Traffic signal cleared"],
+    "/analytics": ["Active vehicles", "Avg response time", "Signals cleared", "Handled emergencies"],
+  };
+
+  const SidebarContent = ({ mobile = false }: { mobile?: boolean }) => (
     <div className="flex flex-col h-full bg-card/50 backdrop-blur-xl border-r border-white/5">
       <div className="p-5 flex items-center gap-3 border-b border-white/5">
         <div className="w-10 h-10 rounded-xl bg-primary/20 flex items-center justify-center border border-primary/30 shadow-[0_0_15px_rgba(6,182,212,0.3)]">
           <ActivitySquare className="text-primary w-6 h-6 animate-pulse" />
         </div>
-        <div>
-          <h1 className="font-display font-bold text-xl tracking-wider text-foreground neon-text uppercase leading-none">S.A.D.S.</h1>
-          <p className="text-[10px] text-muted-foreground uppercase tracking-widest">Command Center</p>
-        </div>
+        {(!sidebarCollapsed || mobile) && (
+          <div>
+            <h1 className="font-display font-bold text-xl tracking-wider text-foreground neon-text uppercase leading-none">S.A.D.S.</h1>
+            <p className="text-[10px] text-muted-foreground uppercase tracking-widest">Command Center</p>
+          </div>
+        )}
+
+        {!mobile && (
+          <Button
+            variant="ghost"
+            size="icon"
+            onClick={() => setSidebarCollapsed((prev) => !prev)}
+            className="ml-auto text-muted-foreground hover:text-foreground"
+          >
+            {sidebarCollapsed ? <ChevronRight className="w-4 h-4" /> : <ChevronDown className="w-4 h-4 -rotate-90" />}
+          </Button>
+        )}
       </div>
 
       <nav className="flex-1 px-3 py-4 space-y-2">
         {navItems.map((item) => {
           const isActive = location === item.path;
           const Icon = item.icon;
-          const isCollapsed = collapsed[item.path] ?? false;
+          const isCollapsed = collapsedSections[item.path] ?? false;
+          const showLabel = !sidebarCollapsed || mobile;
 
           return (
             <div key={item.path} className="rounded-lg border border-white/5 bg-black/10 overflow-hidden">
               <button
-                onClick={() => setCollapsed((prev) => ({ ...prev, [item.path]: !isCollapsed }))}
-                className={`w-full flex items-center justify-between px-3 py-2.5 transition-colors ${isActive ? "bg-primary/10 text-primary" : "text-muted-foreground hover:text-foreground hover:bg-white/5"}`}
+                onClick={() => {
+                  if (!showLabel) {
+                    navigate(item.path);
+                    return;
+                  }
+                  setCollapsedSections((prev) => ({ ...prev, [item.path]: !isCollapsed }));
+                }}
+                className={`w-full flex items-center ${showLabel ? "justify-between" : "justify-center"} px-3 py-2.5 transition-colors ${isActive ? "bg-primary/10 text-primary" : "text-muted-foreground hover:text-foreground hover:bg-white/5"}`}
               >
                 <span className="flex items-center gap-3">
                   <Icon className="w-4 h-4" />
-                  <span className="font-medium tracking-wide text-sm">{item.name}</span>
+                  {showLabel && <span className="font-medium tracking-wide text-sm">{item.name}</span>}
                 </span>
-                {isCollapsed ? <ChevronRight className="w-4 h-4" /> : <ChevronDown className="w-4 h-4" />}
+                {showLabel && (isCollapsed ? <ChevronRight className="w-4 h-4" /> : <ChevronDown className="w-4 h-4" />)}
               </button>
 
-              {!isCollapsed && (
+              {showLabel && !isCollapsed && (
                 <div className="px-3 pb-3">
                   <Link href={item.path} className="block text-xs text-muted-foreground hover:text-primary transition-colors pl-7">
                     Open section
                   </Link>
+                  <ul className="mt-2 pl-7 space-y-1">
+                    {sectionPreview[item.path]?.map((label) => (
+                      <li key={label} className="text-[10px] text-muted-foreground/90 tracking-wide">• {label}</li>
+                    ))}
+                  </ul>
                 </div>
               )}
             </div>
@@ -70,7 +102,8 @@ export function Layout({ children }: LayoutProps) {
         })}
       </nav>
 
-      <div className="p-4 border-t border-white/5">
+      {(!sidebarCollapsed || mobile) && (
+        <div className="p-4 border-t border-white/5">
         <div className="bg-destructive/10 border border-destructive/20 rounded-xl p-3 flex items-start gap-3">
           <ShieldAlert className="text-destructive w-5 h-5 shrink-0 mt-0.5" />
           <div>
@@ -78,17 +111,18 @@ export function Layout({ children }: LayoutProps) {
             <p className="text-xs text-muted-foreground mt-1">All monitoring nodes active. Auto-override engaged.</p>
           </div>
         </div>
-      </div>
+        </div>
+      )}
     </div>
   );
 
   return (
     <div className="min-h-screen flex bg-background text-foreground overflow-hidden">
-      <aside className="hidden md:block w-72 h-screen fixed z-20">
+      <aside className={`hidden md:block ${sidebarCollapsed ? "w-20" : "w-72"} h-screen fixed z-20 transition-all duration-300`}>
         <SidebarContent />
       </aside>
 
-      <main className="flex-1 md:pl-72 h-screen flex flex-col relative z-10">
+      <main className={`flex-1 ${sidebarCollapsed ? "md:pl-20" : "md:pl-72"} h-screen flex flex-col relative z-10 transition-all duration-300`}>
         <header className="md:hidden h-16 glass-panel border-b border-white/10 flex items-center justify-between px-4 z-30 relative">
           <div className="flex items-center gap-2">
             <ActivitySquare className="text-primary w-6 h-6" />
@@ -101,7 +135,7 @@ export function Layout({ children }: LayoutProps) {
               </Button>
             </SheetTrigger>
             <SheetContent side="left" className="p-0 w-72 bg-card border-r-white/10">
-              <SidebarContent />
+              <SidebarContent mobile />
             </SheetContent>
           </Sheet>
         </header>
